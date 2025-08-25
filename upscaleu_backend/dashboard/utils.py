@@ -40,6 +40,23 @@ def generate_career_plan(responses):
     }
 
 
+def generate_roadmap(answers, user):
+    """
+    Placeholder roadmap generator.
+    In real-world: integrate OpenAI / custom ML pipeline.
+    """
+
+    # Example: just a structured mock roadmap
+    return {
+        "career_goal": "Software Engineer",
+        "steps": [
+            {"step": 1, "title": "Learn Python", "resources": ["RealPython", "LeetCode"]},
+            {"step": 2, "title": "Master Data Structures & Algorithms", "resources": ["NeetCode", "GeeksforGeeks"]},
+            {"step": 3, "title": "Build Projects", "resources": ["GitHub", "Kaggle"]},
+            {"step": 4, "title": "Apply for Internships", "resources": ["LinkedIn", "AngelList"]}
+        ],
+        "timeline": "6-12 months"
+    }
 
 
 
