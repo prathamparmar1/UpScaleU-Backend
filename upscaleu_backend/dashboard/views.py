@@ -1,12 +1,12 @@
 from django.shortcuts import render
-from .serializers import QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,CareerRoadmapSerializer,CareerRoadmap
+from .serializers import QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer
 from .utils import generate_career_plan
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import QuizSubmission ,UserProfile, CareerRoadmap
-from .utils import generate_roadmap # custom AI/rules-based generator
+from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis
+from .utils import generate_roadmap,analyze_skill_gaps # custom AI/rules-based generator
 from rest_framework import generics
 from rest_framework.exceptions import NotFound
 
@@ -104,3 +104,71 @@ class LatestRoadmapView(generics.GenericAPIView):
             raise NotFound("No roadmap found for this user.")
         serializer = self.get_serializer(latest_roadmap)
         return Response(serializer.data)
+    
+# Dashboard Overview
+class DashboardOverviewAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Career goal
+        career_goal = user.userprofile.career_goal if hasattr(user, 'userprofile') else None
+
+        # Latest quiz
+        
+        latest_quiz = QuizSubmission.objects.filter(user=request.user).order_by("-submitted_at").first()
+        latest_quiz_data = QuizSubmissionHistorySerializer(latest_quiz).data if latest_quiz else None
+
+        # Latest roadmap
+        latest_roadmap = CareerRoadmap.objects.filter(user=request.user).order_by("-created_at").first()
+        latest_roadmap_data = CareerRoadmapSerializer(latest_roadmap).data if latest_roadmap else None
+
+        return Response({
+            "career_goal": career_goal,
+            "latest_quiz": latest_quiz_data,
+            "latest_roadmap": latest_roadmap_data
+        })
+        
+
+class SkillGapAnalysisAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        career_goal = request.data.get("career_goal")
+        current_skills = request.data.get("current_skills", [])
+
+        if not career_goal:
+            return Response({"error": "career_goal is required"}, status=400)
+        if not isinstance(current_skills, list):
+            return Response({"error": "current_skills must be a list"}, status=400)
+
+        result = analyze_skill_gaps(career_goal, current_skills)
+
+        # Save to DB
+        analysis = SkillGapAnalysis.objects.create(
+            user=request.user,
+            career_goal=result["career_goal"],
+            required_skills=result["required_skills"],
+            current_skills=result["current_skills"],
+            skill_gaps=result["skill_gaps"],
+            recommendations=result["recommendations"],
+        )
+
+        serializer = SkillGapAnalysisSerializer(analysis)
+        return Response(serializer.data, status=200)
+
+class LatestSkillGapAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        analysis = (
+            SkillGapAnalysis.objects.filter(user=request.user)
+            .order_by("-created_at")
+            .first()
+        )
+        if not analysis:
+            return Response({"message": "No skill gap analysis found."}, status=404)
+
+        serializer = SkillGapAnalysisSerializer(analysis)
+        return Response(serializer.data, status=200)

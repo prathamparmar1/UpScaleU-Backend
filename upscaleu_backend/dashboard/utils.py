@@ -59,6 +59,28 @@ def generate_roadmap(answers, user):
     }
 
 
+def analyze_skill_gaps(career_goal, current_skills):
+    """
+    Mock logic for MVP — later this can be replaced with OpenAI API.
+    """
+    # Example pre-defined skills for simplicity
+    required_skills_map = {
+        "Full Stack Developer": ["HTML", "CSS", "JavaScript", "React", "Node.js", "PostgreSQL"],
+        "Data Scientist": ["Python", "Pandas", "NumPy", "Machine Learning", "SQL"],
+        "Mobile App Developer": ["Kotlin", "Swift", "Flutter", "Firebase"],
+    }
+
+    required_skills = required_skills_map.get(career_goal, [])
+    skill_gaps = [skill for skill in required_skills if skill not in current_skills]
+    recommendations = [f"Learn {skill} via an online course or project" for skill in skill_gaps]
+
+    return {
+        "career_goal": career_goal,
+        "required_skills": required_skills,
+        "current_skills": current_skills,
+        "skill_gaps": skill_gaps,
+        "recommendations": recommendations,
+    }
 
 
 

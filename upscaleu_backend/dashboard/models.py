@@ -28,3 +28,16 @@ class CareerRoadmap(models.Model):
 
     def __str__(self):
         return f"Roadmap for {self.user.username} - {self.created_at.strftime('%Y-%m-%d')}"
+    
+
+class SkillGapAnalysis(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    career_goal = models.CharField(max_length=255)
+    required_skills = models.JSONField()
+    current_skills = models.JSONField()
+    skill_gaps = models.JSONField()
+    recommendations = models.JSONField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"SkillGapAnalysis - {self.user.username} ({self.career_goal})"
