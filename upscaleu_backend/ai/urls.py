@@ -1,7 +1,7 @@
 from django.urls import path
-from . import views
+from .views import RecommendCareersAPIView, LatestRecommendationAPIView
 
 urlpatterns = [
-    path('recommend-careers/', views.generate_career_recommendations, name='generate_career_recommendations'),
-    path('recommendations/latest/', views.get_latest_career_recommendation, name='get_latest_career_recommendation'),
+    path("recommend-careers/", RecommendCareersAPIView.as_view(), name="ai-recommend-careers"),
+    path("recommendations/latest/", LatestRecommendationAPIView.as_view(), name="ai-latest-recommendation"),
 ]

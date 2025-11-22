@@ -18,9 +18,9 @@ import os
 load_dotenv()
 
 # Access the key
-api_key = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-print("Your API Key:", api_key)  # optional, for testing only
+print("Your API Key:", GEMINI_API_KEY)  # optional, for testing only
 
 # Now you can use it like:
 # client = OpenAI(api_key=api_key)
