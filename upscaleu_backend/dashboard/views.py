@@ -1,16 +1,17 @@
 from django.shortcuts import render
-from .serializers import QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer, RoadmapProgressSerializer
-from .utils import generate_career_plan
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
-from .utils import generate_roadmap,analyze_skill_gaps # custom AI/rules-based generator
 from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
 from ai.models import CareerRecommendation
-from .utils import build_roadmap_from_recommendation
+from ai.serializers import CareerRecommendationSerializer
+from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, generate_career_plan, generate_roadmap,analyze_skill_gaps
+from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
+from .serializers import (QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,
+                          CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer,
+                          RoadmapProgressSerializer)
 
 
 
@@ -109,30 +110,121 @@ class LatestRoadmapView(generics.GenericAPIView):
         return Response(serializer.data)
     
 # Dashboard Overview
+# class DashboardOverviewAPIView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         user = request.user
+        
+#         # Career goal
+#         career_goal = user.userprofile.career_goal if hasattr(user, 'userprofile') else None
+
+#         # Latest quiz
+        
+#         latest_quiz = QuizSubmission.objects.filter(user=request.user).order_by("-submitted_at").first()
+#         latest_quiz_data = QuizSubmissionHistorySerializer(latest_quiz).data if latest_quiz else None
+
+#         # Latest roadmap
+#         latest_roadmap = CareerRoadmap.objects.filter(user=request.user).order_by("-created_at").first()
+#         latest_roadmap_data = CareerRoadmapSerializer(latest_roadmap).data if latest_roadmap else None
+
+#         return Response({
+#             "career_goal": career_goal,
+#             "latest_quiz": latest_quiz_data,
+#             "latest_roadmap": latest_roadmap_data
+#         })
+
 class DashboardOverviewAPIView(APIView):
+    """
+    Return a single JSON with:
+    - career_goal
+    - latest_quiz
+    - latest_roadmap
+    - latest_roadmap_progress
+    - latest_skill_gap
+    - latest_ai_recommendation
+    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        
-        # Career goal
-        career_goal = user.userprofile.career_goal if hasattr(user, 'userprofile') else None
 
-        # Latest quiz
-        
-        latest_quiz = QuizSubmission.objects.filter(user=request.user).order_by("-submitted_at").first()
-        latest_quiz_data = QuizSubmissionHistorySerializer(latest_quiz).data if latest_quiz else None
+        # 1) Career goal (from UserProfile)
+        try:
+            profile = UserProfile.objects.get(user=user)
+            career_goal = profile.career_goal or ""
+        except UserProfile.DoesNotExist:
+            career_goal = ""
 
-        # Latest roadmap
-        latest_roadmap = CareerRoadmap.objects.filter(user=request.user).order_by("-created_at").first()
-        latest_roadmap_data = CareerRoadmapSerializer(latest_roadmap).data if latest_roadmap else None
+        # 2) Latest quiz submission
+        latest_quiz = (
+            QuizSubmission.objects.filter(user=user)
+            .order_by("-submitted_at")
+            .first()
+        )
+        latest_quiz_data = (
+            QuizSubmissionHistorySerializer(latest_quiz).data if latest_quiz else None
+        )
 
-        return Response({
-            "career_goal": career_goal,
-            "latest_quiz": latest_quiz_data,
-            "latest_roadmap": latest_roadmap_data
-        })
-        
+        # 3) Latest roadmap + progress
+        latest_roadmap = (
+            CareerRoadmap.objects.filter(user=user)
+            .order_by("-created_at")
+            .first()
+        )
+
+        latest_roadmap_data = None
+        latest_roadmap_progress = None
+
+        if latest_roadmap:
+            latest_roadmap_data = CareerRoadmapSerializer(latest_roadmap).data
+
+            # get or create progress entry for this roadmap
+            progress_obj, created = RoadmapProgress.objects.get_or_create(
+                user=user,
+                roadmap=latest_roadmap,
+            )
+
+            # either use serializer or direct compute_roadmap_progress
+            latest_roadmap_progress = compute_roadmap_progress(latest_roadmap, progress_obj)
+
+        # 4) Latest skill gap analysis
+        latest_skill_gap = (
+            SkillGapAnalysis.objects.filter(user=user)
+            .order_by("-created_at")
+            .first()
+        )
+        latest_skill_gap_data = (
+            SkillGapAnalysisSerializer(latest_skill_gap).data
+            if latest_skill_gap
+            else None
+        )
+
+        # 5) Latest AI career recommendation
+        latest_rec = (
+            CareerRecommendation.objects.filter(user=user)
+            .order_by("-generated_at")
+            .first()
+        )
+        latest_rec_data = (
+            CareerRecommendationSerializer(latest_rec).data
+            if latest_rec
+            else None
+        )
+
+        # Final combined payload
+        return Response(
+            {
+                "career_goal": career_goal,
+                "latest_quiz": latest_quiz_data,
+                "latest_roadmap": latest_roadmap_data,
+                "latest_roadmap_progress": latest_roadmap_progress,
+                "latest_skill_gap": latest_skill_gap_data,
+                "latest_recommendation": latest_rec_data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
 
 class SkillGapAnalysisAPIView(APIView):
     permission_classes = [IsAuthenticated]
@@ -213,6 +305,18 @@ class RoadmapFromRecommendationAPIView(APIView):
             rec_data,
             selected_career=selected_career
         )
+        
+        target_career = (
+            selected_career
+            or roadmap_data.get("target_career")
+            or rec_data.get("career_goal", "")
+        )
+
+        # ⭐ 4) UPDATE USER PROFILE CAREER GOAL
+        if target_career:
+            profile, _ = UserProfile.objects.get_or_create(user=request.user)
+            profile.career_goal = target_career
+            profile.save()
 
         # create CareerRoadmap entry
         roadmap = CareerRoadmap.objects.create(

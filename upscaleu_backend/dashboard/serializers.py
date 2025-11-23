@@ -8,14 +8,13 @@ class QuizAnswerSerializer(serializers.Serializer):
     answer = serializers.CharField()
 
 class QuizSubmitSerializer(serializers.Serializer):
-    class Meta:
-        model = QuizSubmission
-        fields = ['answers', 'career_plan', 'submitted_at']
-    
+    responses = QuizAnswerSerializer(many=True)
+        
 class QuizSubmissionHistorySerializer(serializers.ModelSerializer):
     class Meta:
         model = QuizSubmission
         fields = ['id', 'answers', 'career_plan', 'submitted_at']
+        read_only_fields = ['id', 'submitted_at']
 
 class CareerGoalSerializer(serializers.ModelSerializer):
     class Meta:
