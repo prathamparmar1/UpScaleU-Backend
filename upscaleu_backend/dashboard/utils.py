@@ -83,6 +83,153 @@ def analyze_skill_gaps(career_goal, current_skills):
     }
 
 
+def build_roadmap_from_recommendation(rec_data, selected_career=None):
+    """
+    Build a roadmap structure from the AI career recommendation JSON.
+
+    rec_data example:
+    {
+      "career_goal": "...",
+      "recommendations": [
+        {
+          "career": "...",
+          "reason": "...",
+          "score": 95,
+          "required_skills": [...]
+        },
+        ...
+      ],
+      "summary": "..."
+    }
+
+    selected_career: optional string, if provided we pick that career from the list.
+    """
+    if not rec_data:
+        return {
+            "message": "No recommendation data provided."
+        }
+
+    recommendations = rec_data.get("recommendations", [])
+    if not isinstance(recommendations, list) or not recommendations:
+        return {
+            "message": "No recommendations list found in data."
+        }
+
+    chosen = None
+
+    # 1) If user gave a selected career name, try to match it
+    if selected_career:
+        sel_lower = selected_career.strip().lower()
+        for r in recommendations:
+            if str(r.get("career", "")).strip().lower() == sel_lower:
+                chosen = r
+                break
+
+    # 2) Fallback: if no chosen career found, pick highest score
+    if chosen is None:
+        chosen = sorted(
+            recommendations,
+            key=lambda r: r.get("score", 0),
+            reverse=True
+        )[0]
+
+    career = chosen.get("career", "Unknown Career")
+    required_skills = chosen.get("required_skills", [])
+    summary = rec_data.get("summary", "")
+
+    foundation_skills = required_skills[:2]
+    core_skills = required_skills[2:4]
+    advanced_skills = required_skills[4:]
+
+    roadmap = {
+        "target_career": career,
+        "career_goal": rec_data.get("career_goal", ""),
+        "summary": summary,
+        "phases": [
+            {
+                "name": "Phase 1: Foundations",
+                "duration_weeks": 4,
+                "description": "Build strong fundamentals required for this career.",
+                "skills": foundation_skills,
+                "suggested_actions": [
+                    "Follow a beginner course for these skills.",
+                    "Take notes and make small practice exercises."
+                ],
+            },
+            {
+                "name": "Phase 2: Core Skills & Projects",
+                "duration_weeks": 6,
+                "description": "Work on the core skills that will be used in real-world projects.",
+                "skills": core_skills,
+                "suggested_actions": [
+                    "Build 1–2 small projects using these skills.",
+                    "Push your code to GitHub and document your learning."
+                ],
+            },
+            {
+                "name": "Phase 3: Advanced & Portfolio",
+                "duration_weeks": 6,
+                "description": "Move to advanced topics and create portfolio-ready projects.",
+                "skills": advanced_skills,
+                "suggested_actions": [
+                    "Build at least one larger project that combines all skills.",
+                    "Prepare a portfolio and resume tailored to this career."
+                ],
+            },
+        ],
+    }
+
+    return roadmap
+
+
+def compute_roadmap_progress(roadmap, progress_obj):
+    """
+    Compute progress stats for a given CareerRoadmap and RoadmapProgress.
+    - roadmap.generated_roadmap is the JSON we created earlier with phases/skills.
+    - progress_obj.completed_skills is a list of skill names the user has marked done.
+    """
+    data = roadmap.generated_roadmap or {}
+    phases = data.get("phases", [])
+
+    completed_skills = set(progress_obj.completed_skills or [])
+
+    total_skills = 0
+    completed_count = 0
+    per_phase = []
+
+    for phase in phases:
+        phase_name = phase.get("name", "Unnamed Phase")
+        skills = phase.get("skills", []) or []
+
+        phase_total = len(skills)
+        total_skills += phase_total
+
+        phase_completed = 0
+        for s in skills:
+            if s in completed_skills:
+                phase_completed += 1
+
+        completed_count += phase_completed
+
+        phase_progress = {
+            "phase_name": phase_name,
+            "total_skills": phase_total,
+            "completed_skills": phase_completed,
+            "percent": (phase_completed / phase_total * 100) if phase_total > 0 else 0,
+        }
+        per_phase.append(phase_progress)
+
+    overall_percent = (completed_count / total_skills * 100) if total_skills > 0 else 0
+
+    return {
+        "overall": {
+            "total_skills": total_skills,
+            "completed_skills": completed_count,
+            "percent": overall_percent,
+        },
+        "phases": per_phase,
+    }
+
 
 
 

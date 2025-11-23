@@ -1,14 +1,17 @@
 from django.shortcuts import render
-from .serializers import QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer
+from .serializers import QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer, RoadmapProgressSerializer
 from .utils import generate_career_plan
 from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis
+from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
 from .utils import generate_roadmap,analyze_skill_gaps # custom AI/rules-based generator
-from rest_framework import generics
+from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
+from ai.models import CareerRecommendation
+from .utils import build_roadmap_from_recommendation
+
 
 
 class UpdateCareerGoalAPIView(APIView):
@@ -172,3 +175,144 @@ class LatestSkillGapAPIView(APIView):
 
         serializer = SkillGapAnalysisSerializer(analysis)
         return Response(serializer.data, status=200)
+
+class RoadmapFromRecommendationAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # User can optionally specify which CareerRecommendation row to use
+        rec_id = request.data.get("career_recommendation_id")
+
+        if rec_id:
+            try:
+                rec = CareerRecommendation.objects.get(id=rec_id, user=request.user)
+            except CareerRecommendation.DoesNotExist:
+                return Response(
+                    {"error": "CareerRecommendation not found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            # use latest recommendation for this user
+            rec = (
+                CareerRecommendation.objects.filter(user=request.user)
+                .order_by("-generated_at")
+                .first()
+            )
+            if not rec:
+                return Response(
+                    {"error": "No career recommendations found for this user."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+        rec_data = rec.recommendations  # JSON dict
+
+        # ⭐ user choice: which career from the recommendations list
+        selected_career = request.data.get("career")  # e.g. "DevOps Engineer"
+
+        roadmap_data = build_roadmap_from_recommendation(
+            rec_data,
+            selected_career=selected_career
+        )
+
+        # create CareerRoadmap entry
+        roadmap = CareerRoadmap.objects.create(
+            user=request.user,
+            quiz_submission=rec.quiz_submission,  # may be None
+            generated_roadmap=roadmap_data,
+        )
+
+        serializer = CareerRoadmapSerializer(roadmap)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+class RoadmapProgressView(APIView):
+    """
+    GET current progress for a roadmap.
+    If roadmap_id is passed as query param, use that.
+    Otherwise, use latest roadmap for the user.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        roadmap_id = request.query_params.get("roadmap_id")
+
+        if roadmap_id:
+            try:
+                roadmap = CareerRoadmap.objects.get(id=roadmap_id, user=request.user)
+            except CareerRoadmap.DoesNotExist:
+                return Response({"error": "Roadmap not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            roadmap = (
+                CareerRoadmap.objects.filter(user=request.user)
+                .order_by("-created_at")
+                .first()
+            )
+            if not roadmap:
+                return Response({"error": "No roadmap found for this user"}, status=status.HTTP_404_NOT_FOUND)
+
+        progress, created = RoadmapProgress.objects.get_or_create(
+            user=request.user,
+            roadmap=roadmap
+        )
+
+        serializer = RoadmapProgressSerializer(progress)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class MarkSkillCompletedAPIView(APIView):
+    """
+    POST to mark or unmark a skill as completed in a given roadmap.
+    Body:
+    {
+      "roadmap_id": 3,
+      "skill": "JavaScript",
+      "completed": true   # or false
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        roadmap_id = request.data.get("roadmap_id")
+        skill = request.data.get("skill")
+        completed = request.data.get("completed", True)
+
+        if not roadmap_id or not skill:
+            return Response(
+                {"error": "roadmap_id and skill are required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            roadmap = CareerRoadmap.objects.get(id=roadmap_id, user=request.user)
+        except CareerRoadmap.DoesNotExist:
+            return Response({"error": "Roadmap not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        progress, created = RoadmapProgress.objects.get_or_create(
+            user=request.user,
+            roadmap=roadmap
+        )
+
+        # validate that skill exists in roadmap
+        skills_in_roadmap = []
+        for phase in (roadmap.generated_roadmap or {}).get("phases", []):
+            skills_in_roadmap.extend(phase.get("skills", []) or [])
+
+        if skill not in skills_in_roadmap:
+            return Response(
+                {"error": f"Skill '{skill}' not found in this roadmap"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # update completed_skills
+        completed_list = set(progress.completed_skills or [])
+
+        if completed:
+            completed_list.add(skill)
+        else:
+            if skill in completed_list:
+                completed_list.remove(skill)
+
+        progress.completed_skills = list(completed_list)
+        progress.save()
+
+        serializer = RoadmapProgressSerializer(progress)
+        return Response(serializer.data, status=status.HTTP_200_OK)

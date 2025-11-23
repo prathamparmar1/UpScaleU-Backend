@@ -41,3 +41,23 @@ class SkillGapAnalysis(models.Model):
 
     def __str__(self):
         return f"SkillGapAnalysis - {self.user.username} ({self.career_goal})"
+
+
+class RoadmapProgress(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    roadmap = models.ForeignKey(CareerRoadmap, on_delete=models.CASCADE, related_name="progress_entries")
+
+    # store skill names that user completed (they must exist in generated_roadmap phases/skills)
+    completed_skills = models.JSONField(default=list, blank=True)
+
+    # optional: store completed phase names if you want
+    completed_phases = models.JSONField(default=list, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("user", "roadmap")
+
+    def __str__(self):
+        return f"Progress for {self.user.username} - Roadmap {self.roadmap.id}"
