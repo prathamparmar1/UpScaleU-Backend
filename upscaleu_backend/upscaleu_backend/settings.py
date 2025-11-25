@@ -40,7 +40,7 @@ SECRET_KEY = 'django-insecure-9f&hurtaadr+#2-a!i^b2bfgli-6=4b86bc8j#abslvkv^@zqq
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["0.0.0.0", "https://upscaleu.vercel.app","localhost", "https://upscaleu-backend.onrender.com"]
 
 
 # Application definition
@@ -73,6 +73,8 @@ MIDDLEWARE = [
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
+    "https://upscaleu.vercel.app",
+    
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
