@@ -21,7 +21,7 @@ load_dotenv()
 # Access the key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-print("Your API Key:", GEMINI_API_KEY)  # optional, for testing only
+# optional, for testing only
 
 # Now you can use it like:
 # client = OpenAI(api_key=api_key)
@@ -35,12 +35,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-9f&hurtaadr+#2-a!i^b2bfgli-6=4b86bc8j#abslvkv^@zqq'
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret")
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["0.0.0.0", "https://upscaleu.vercel.app","localhost", "https://upscaleu-backend-1.onrender.com"]
+ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
 
 
 # Application definition
@@ -62,6 +62,8 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    "whitenoise.middleware.WhiteNoiseMiddleware",   
+    "corsheaders.middleware.CorsMiddleware", 
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -75,6 +77,10 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://upscaleu.vercel.app",
     
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    "https://upscaleu.vercel.app",
 ]
 
 CORS_ALLOW_ALL_ORIGINS = True
@@ -165,6 +171,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / "staticfiles"
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field

@@ -4,7 +4,6 @@ import json
 from django.conf import settings
 
 GEMINI_API_KEY = getattr(settings, "GEMINI_API_KEY", "")
-print("GEMINI_API_KEY loaded:",GEMINI_API_KEY)  # for debugging only
 
 def build_recommendation_prompt(quiz_answers, user_profile):
     """
