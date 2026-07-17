@@ -11,7 +11,7 @@ from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, 
 from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
 from .serializers import (QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,
                           CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer,
-                          RoadmapProgressSerializer)
+                          RoadmapProgressSerializer, CareerRoadmapListSerializer)
 
 
 
@@ -339,6 +339,38 @@ class RoadmapFromRecommendationAPIView(APIView):
 
         serializer = CareerRoadmapSerializer(roadmap)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+class RoadmapListAPIView(APIView):
+    """
+    List all roadmaps this user has generated, most recent first, with a
+    lightweight progress summary for each. Used by the "My Roadmaps" page so
+    exploring a second career doesn't silently orphan the first one.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        roadmaps = CareerRoadmap.objects.filter(user=request.user).order_by("-created_at")
+        serializer = CareerRoadmapListSerializer(roadmaps, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class RoadmapDetailAPIView(APIView):
+    """
+    Fetch one specific roadmap (full phase-by-phase detail) by id, scoped to the
+    requesting user. Used when viewing a roadmap from history rather than just
+    the latest one.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, roadmap_id):
+        try:
+            roadmap = CareerRoadmap.objects.get(id=roadmap_id, user=request.user)
+        except CareerRoadmap.DoesNotExist:
+            return Response({"error": "Roadmap not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CareerRoadmapSerializer(roadmap)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class RoadmapProgressView(APIView):
     """
