@@ -6,7 +6,10 @@ class QuizSubmission(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE)
     submitted_at = models.DateTimeField(auto_now_add=True)
     answers = models.JSONField()
-    career_plan = models.JSONField()
+    # No longer populated by a real generator (the old mock that lived here has been
+    # removed from the quiz-submit path). Kept as an optional field rather than dropped
+    # outright, in case a future feature wants to reuse it.
+    career_plan = models.JSONField(default=dict, blank=True)
 
     def __str__(self):
         return f"{self.user.username} - {self.submitted_at.strftime('%Y-%m-%d %H:%M')}"

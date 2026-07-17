@@ -7,7 +7,7 @@ from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
 from ai.models import CareerRecommendation
 from ai.serializers import CareerRecommendationSerializer
-from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, generate_career_plan, generate_roadmap,analyze_skill_gaps
+from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, generate_roadmap, analyze_skill_gaps
 from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
 from .serializers import (QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,
                           CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer,
@@ -19,7 +19,10 @@ class UpdateCareerGoalAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def put(self, request):
-        profile = UserProfile.objects.get(user=request.user)
+        # get_or_create rather than get(): if the UserProfile post_save signal
+        # ever fails to fire (e.g. for accounts created before that bug was fixed),
+        # this endpoint should still work instead of 500-ing.
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
         serializer = CareerGoalSerializer(profile, data=request.data)
 
         if serializer.is_valid():
@@ -35,18 +38,20 @@ class QuizSubmitAPIView(APIView):
         serializer = QuizSubmitSerializer(data=request.data)
         if serializer.is_valid():
             responses = serializer.validated_data['responses']
-            try:
-                plan = generate_career_plan(responses)
-                QuizSubmission.objects.create(
+
+            # NOTE: this used to also call generate_career_plan(responses) here --
+            # a hardcoded 3-outcome keyword mock that nothing in the frontend reads,
+            # wrapped in a try/except that returned a hard 500 on any failure. That
+            # meant a broken mock could fail the entire quiz submission for zero
+            # benefit. Real recommendations come from RecommendCareersAPIView
+            # (ai/views.py), which the frontend calls right after this.
+            QuizSubmission.objects.create(
                 user=request.user,
                 answers=responses,
-                career_plan= plan
-                )
-            except Exception as e:
-                return Response({'error': 'AI generation failed', 'details': str(e)}, status=500)
-            
-            return Response({'career_plan': plan}, status=200)
-        
+            )
+
+            return Response({'message': 'Quiz submitted successfully.'}, status=200)
+
         return Response(serializer.errors, status=400)
 
 class QuizHistoryView(APIView):
@@ -301,9 +306,16 @@ class RoadmapFromRecommendationAPIView(APIView):
         # ⭐ user choice: which career from the recommendations list
         selected_career = request.data.get("career")  # e.g. "DevOps Engineer"
 
+        # Pull the quiz answers behind this recommendation (if any) so the roadmap
+        # can be personalized, not just career-generic.
+        quiz_answers = None
+        if rec.quiz_submission and rec.quiz_submission.answers:
+            quiz_answers = rec.quiz_submission.answers
+
         roadmap_data = build_roadmap_from_recommendation(
             rec_data,
-            selected_career=selected_career
+            selected_career=selected_career,
+            quiz_answers=quiz_answers,
         )
         
         target_career = (

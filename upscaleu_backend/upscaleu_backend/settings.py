@@ -18,14 +18,7 @@ import dj_database_url
 # Load all key-value pairs from .env
 load_dotenv()
 
-# Access the key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# optional, for testing only
-
-# Now you can use it like:
-# client = OpenAI(api_key=api_key)
-
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,9 +31,15 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-secret")
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# Reads from env; defaults to False so a missing/misconfigured env var fails safe.
+DEBUG = os.environ.get("DJANGO_DEBUG", "False").strip().lower() in ("1", "true", "yes")
 
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
+# Comma-separated list in the env var, e.g. "upscaleu-backend.onrender.com,localhost"
+_allowed_hosts_env = os.environ.get("DJANGO_ALLOWED_HOSTS", "")
+ALLOWED_HOSTS = [h.strip() for h in _allowed_hosts_env.split(",") if h.strip()]
+if DEBUG and not ALLOWED_HOSTS:
+    # Convenience for local development only — never applies when DEBUG=False.
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 
 # Application definition
@@ -62,28 +61,29 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
-    "whitenoise.middleware.WhiteNoiseMiddleware",   
-    "corsheaders.middleware.CorsMiddleware", 
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+    "corsheaders.middleware.CorsMiddleware",
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
-    "corsheaders.middleware.CorsMiddleware",
 ]
 
+# Explicit allowlist — this is what actually governs which origins can call the API.
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://upscaleu.vercel.app",
-    
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://upscaleu.vercel.app",
 ]
 
-CORS_ALLOW_ALL_ORIGINS = True
+# IMPORTANT: do NOT also set CORS_ALLOW_ALL_ORIGINS = True.
+# That setting ignores CORS_ALLOWED_ORIGINS entirely and lets every origin through,
+# which defeats the allowlist above and is unsafe once cookies/auth are involved.
 
 
 ROOT_URLCONF = 'upscaleu_backend.urls'
@@ -111,29 +111,10 @@ WSGI_APPLICATION = 'upscaleu_backend.wsgi.application'
 # https://docs.djangoproject.com/en/4.2/ref/settings/#databases
 
 DATABASES = {
-     "default": dj_database_url.config(
+    "default": dj_database_url.config(
         default=os.environ.get("DATABASE_URL")
-        )
+    )
 }
-
-
-# {
-#     'default': {
-#         'ENGINE': 'django.db.backends.sqlite3',
-#         'NAME': BASE_DIR / 'db.sqlite3',
-#     }
-# }
-#     'default': {
-#         'ENGINE': 'django.db.backends.postgresql',
-#         'NAME': 'upscaleu_db',
-#         'USER': 'upscaleu_user',
-#         'PASSWORD': 'Pratham@200305',
-#         'HOST': 'localhost',
-#         'PORT': '5432',
-#     }
-# }
-
-
 
 
 # Password validation
@@ -172,6 +153,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -186,5 +172,15 @@ REST_FRAMEWORK = {
     ),
 }
 
-#Pratham, Parmar123 (superuser credentials)
-#admin, adminpass (loginID credentials)
+# NOTE: real credentials must never be committed here, even in a comment.
+# If any admin/superuser credentials were previously written in this file,
+# rotate them immediately (change the password via `python manage.py changepassword <username>`),
+# and keep credentials only in your password manager / hosting provider's secrets store.
+
+# Security hardening that only applies once DEBUG is False (i.e. in production).
+if not DEBUG:
+    SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SECURE_SSL_REDIRECT", "True").strip().lower() in ("1", "true", "yes")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = 60 * 60 * 24 * 7  # 1 week; raise once you've confirmed HTTPS works everywhere
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True

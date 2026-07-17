@@ -1,94 +1,113 @@
 import os
-import requests
+import re
 import json
+import requests
 from django.conf import settings
 
 GEMINI_API_KEY = getattr(settings, "GEMINI_API_KEY", "")
+GEMINI_MODEL = "gemini-2.5-pro"
+
+# The 8 archetypes the quiz is built around. Naming these explicitly in the prompt
+# is what actually lets the model recommend careers beyond the usual handful —
+# without this, "career recommendation assistant" defaults to Software Engineer /
+# Doctor / Data Scientist almost every time, regardless of quiz answers.
+ARCHETYPES = {
+    "Makers": "build with their hands — trades, crafts, physical products",
+    "Connectors": "work closely with people — coordination, service, relationships",
+    "Explorers": "thrive outdoors or off-script — fieldwork, travel, nature",
+    "Screen Workers": "create digitally — software, design, content, data",
+    "Thinkers": "solve and analyze — research, science, strategy",
+    "Performers": "express and entertain — arts, media, public presence",
+    "Healers": "care for others — health, therapy, support roles",
+    "Builders": "start and grow things — entrepreneurship, business, ventures",
+}
+
 
 def build_recommendation_prompt(quiz_answers, user_profile):
     """
-    Build a prompt asking the model to return structured JSON with career recommendations.
-    We instruct the model to respond in strict JSON with keys: recommendations: [{career, reason, score, required_skills}], summary.
+    Build a prompt asking Gemini to return structured JSON with career recommendations,
+    grounded in a wide space of real careers rather than the handful of "obvious" options.
     """
-    # convert quiz answers list->string for prompt
     answers_text = ""
     for idx, a in enumerate(quiz_answers or []):
-        # if answer is dict with question/answer:
         if isinstance(a, dict):
-            answers_text += f"Q{idx+1}: {a.get('question','')}\nA: {a.get('answer','')}\n"
+            answers_text += f"Q{idx + 1}: {a.get('question', '')}\nA: {a.get('answer', '')}\n"
         else:
-            answers_text += f"Answer {idx+1}: {str(a)}\n"
+            answers_text += f"Answer {idx + 1}: {str(a)}\n"
 
-    career_goal = getattr(user_profile, "career_goal", "")
+    career_goal = getattr(user_profile, "career_goal", "") or ""
+    archetype_lines = "\n".join(f"- {name}: {desc}" for name, desc in ARCHETYPES.items())
 
     prompt = f"""
-You are a career recommendation assistant. Given the user's quiz answers and current career goal, output a JSON object EXACTLY (no extra text) with:
+You are a career guidance assistant for students and early-career professionals in India.
+Your job is to widen their sense of what's possible, not just confirm the handful of careers
+they already know about (engineer, doctor, generic "software developer", etc).
+
+The quiz below maps a person's interests across 8 broad career archetypes:
+{archetype_lines}
+
+Use the person's answers to infer which archetype(s) they lean toward, then recommend SPECIFIC,
+real careers that fit — including less commonly discussed ones when they genuinely match
+(e.g. within Makers: furniture maker, ceramic artist; within Explorers: wildlife photographer,
+drone pilot; within Thinkers: behavioural economist, UX researcher; within Builders: SaaS
+founder, franchise owner). Recommendations should feel personally reasoned from their specific
+answers, not generic. Prefer variety across archetypes over five near-identical tech roles,
+unless their answers overwhelmingly point to one archetype.
+
+Output a JSON object EXACTLY (no markdown fences, no extra text) with this shape:
 {{
-  "career_goal": "<the user's career goal or blank>",
+  "career_goal": "<the user's stated career goal, or blank if none>",
   "recommendations": [
     {{
-      "career": "<career name>",
-      "reason": "<one-line reason why it's a good fit>",
+      "career": "<specific career name>",
+      "reason": "<one to two sentences tying this back to their actual answers>",
       "score": <0-100 integer suitability score>,
-      "required_skills": ["skill1","skill2",...]
-    }},
-    ...
+      "required_skills": ["skill1", "skill2", "skill3"]
+    }}
   ],
-  "summary": "<one-paragraph high-level summary>"
+  "summary": "<one short paragraph summarizing their overall profile>"
 }}
 
-User career_goal: {career_goal}
+Return between 4 and 6 recommendations, ranked by score descending.
+
+User's stated career goal (may be blank): {career_goal}
+
 Quiz answers:
 {answers_text}
 
-Return ONLY the JSON object.
-    """.strip()
+Return ONLY the JSON object described above.
+""".strip()
 
     return prompt
 
-def call_gemini(prompt, max_tokens=800):
+
+def call_gemini(prompt, max_output_tokens=2048, temperature=0.7):
     """
-    Call Google Gemini (Generative Language API) generateContent endpoint.
-    Docs pattern:
-    POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=API_KEY
-    Body:
-    { "contents": [ { "parts": [ { "text": "your prompt" } ] } ] }
+    Call Google Gemini's generateContent endpoint, requesting native JSON output
+    so we don't have to regex-extract JSON out of prose.
     """
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY not set")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
 
-    headers = {
-        "Content-Type": "application/json",
-    }
+    headers = {"Content-Type": "application/json"}
 
     payload = {
         "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ]
+            {"parts": [{"text": prompt}]}
+        ],
+        "generationConfig": {
+            "temperature": temperature,
+            "maxOutputTokens": max_output_tokens,
+            "responseMimeType": "application/json",
+        },
     }
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=30)
+    resp = requests.post(url, headers=headers, json=payload, timeout=45)
     resp.raise_for_status()
     result = resp.json()
 
-    # Typical shape:
-    # {
-    #   "candidates": [
-    #     {
-    #       "content": {
-    #         "parts": [
-    #           { "text": "..." }
-    #         ]
-    #       }
-    #     }
-    #   ]
-    # }
     try:
         candidates = result.get("candidates", [])
         if not candidates:
@@ -102,59 +121,134 @@ def call_gemini(prompt, max_tokens=800):
             raise RuntimeError("Empty text in Gemini response")
         return raw_text
     except Exception as e:
-        # if shape is different, dump whole result for debugging
         raise RuntimeError(f"Unexpected Gemini response format: {result}") from e
+
+
+def _fallback_recommendations(quiz_answers, user_profile):
+    """
+    Used only when Gemini is unreachable or GEMINI_API_KEY is missing.
+    Scores each of the 8 archetypes by simple keyword overlap with the user's answers,
+    so the fallback at least reflects their quiz instead of always saying
+    "Software Engineer".
+    """
+    text = " ".join(
+        (a.get("answer") if isinstance(a, dict) else str(a)) for a in (quiz_answers or [])
+    ).lower()
+
+    keyword_map = {
+        "Makers": ["hands", "build", "craft", "material", "physical", "workshop"],
+        "Connectors": ["people", "conversation", "coordinat", "negotiat", "event", "help someone"],
+        "Explorers": ["outdoor", "trail", "field", "travel", "nature", "unpredictable"],
+        "Screen Workers": ["screen", "code", "design tool", "digital", "app", "software", "data"],
+        "Thinkers": ["understand why", "puzzle", "research", "analy", "math", "structured"],
+        "Performers": ["audience", "perform", "stage", "camera", "laugh", "expression"],
+        "Healers": ["care", "heal", "support", "recover", "volunteer", "counsel"],
+        "Builders": ["business", "risk", "money", "start", "found", "grow"],
+    }
+
+    scores = {name: 0 for name in ARCHETYPES}
+    for name, keywords in keyword_map.items():
+        for kw in keywords:
+            if kw in text:
+                scores[name] += 1
+
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    top_archetypes = [name for name, count in ranked if count > 0][:2] or ["Screen Workers"]
+
+    catalogue = {
+        "Makers": [
+            {"career": "Furniture Maker / Woodworker", "required_skills": ["Woodworking", "Design sketching", "Tool safety"]},
+            {"career": "Jewellery Designer", "required_skills": ["Metalwork or beadwork", "Sketching", "Small business basics"]},
+        ],
+        "Connectors": [
+            {"career": "Event / Wedding Planner", "required_skills": ["Vendor coordination", "Budgeting", "Client communication"]},
+            {"career": "HR Consultant", "required_skills": ["Recruitment basics", "Communication", "Employment policy"]},
+        ],
+        "Explorers": [
+            {"career": "Wildlife Photographer", "required_skills": ["Photography", "Patience/fieldcraft", "Photo editing"]},
+            {"career": "Trekking / Adventure Guide", "required_skills": ["First aid", "Navigation", "Group leadership"]},
+        ],
+        "Screen Workers": [
+            {"career": "Full-Stack Web Developer", "required_skills": ["JavaScript", "APIs", "Databases"]},
+            {"career": "UI/UX Designer", "required_skills": ["Figma", "User research", "Prototyping"]},
+        ],
+        "Thinkers": [
+            {"career": "Data Analyst", "required_skills": ["SQL", "Excel/Sheets", "Data visualization"]},
+            {"career": "UX Researcher", "required_skills": ["User interviews", "Synthesis", "Reporting"]},
+        ],
+        "Performers": [
+            {"career": "YouTube Creator / Content Producer", "required_skills": ["Video editing", "Storytelling", "Consistency"]},
+            {"career": "Voice-Over Artist", "required_skills": ["Voice control", "Basic audio editing", "Scriptreading"]},
+        ],
+        "Healers": [
+            {"career": "Nutritionist / Dietitian", "required_skills": ["Nutrition science", "Client counselling", "Meal planning"]},
+            {"career": "Occupational Therapist", "required_skills": ["Patient care", "Rehabilitation techniques", "Empathy"]},
+        ],
+        "Builders": [
+            {"career": "SaaS Founder", "required_skills": ["Product thinking", "Basic coding or no-code tools", "Sales"]},
+            {"career": "E-commerce / Reseller Business Owner", "required_skills": ["Sourcing", "Marketing", "Basic finance"]},
+        ],
+    }
+
+    recommendations = []
+    score_value = 85
+    for archetype in top_archetypes:
+        for item in catalogue.get(archetype, []):
+            recommendations.append({
+                "career": item["career"],
+                "reason": f"Your answers leaned toward the '{archetype}' archetype, which this career fits well.",
+                "score": score_value,
+                "required_skills": item["required_skills"],
+            })
+            score_value -= 5
+
+    if not recommendations:
+        recommendations = [{
+            "career": "Full-Stack Web Developer",
+            "reason": "A broad, in-demand starting point while we gather more signal on your interests.",
+            "score": 75,
+            "required_skills": ["Programming fundamentals", "Data structures", "Web basics"],
+        }]
+
+    summary = (
+        f"Based on your answers, you lean toward the {' and '.join(top_archetypes)} "
+        f"archetype(s)."
+    )
+
+    return {
+        "career_goal": getattr(user_profile, "career_goal", "") or "",
+        "recommendations": recommendations,
+        "summary": summary,
+        "is_fallback": True,
+    }
+
 
 def generate_recommendations(quiz_answers, user_profile):
     """
-    Try to call Gemini. If it fails or key missing, fall back to simple rule-based mock.
-    Return a dict: {career_goal, recommendations: [...], summary}
+    Try to call Gemini. If it fails or the key is missing, fall back to an
+    archetype-aware, keyword-scored mock (not a single hardcoded default).
+    Returns (parsed_dict, prompt, raw_response).
     """
     prompt = build_recommendation_prompt(quiz_answers, user_profile)
 
-    # Attempt Gemini call, but be defensive
     try:
         raw_resp = call_gemini(prompt)
-        # raw_resp should be JSON text — try to parse
         try:
             parsed = json.loads(raw_resp)
+            parsed.setdefault("is_fallback", False)
             return parsed, prompt, raw_resp
         except Exception:
-            # If model returned plain text, try to extract JSON substring
-            import re
+            # Native JSON mode should make this unnecessary, but keep it as a safety net
+            # in case the model still wraps the JSON in prose.
             m = re.search(r"\{.*\}", raw_resp, re.DOTALL)
             if m:
                 try:
                     parsed = json.loads(m.group(0))
+                    parsed.setdefault("is_fallback", False)
                     return parsed, prompt, raw_resp
                 except Exception:
                     pass
-            # fallback to mock
             raise RuntimeError("Failed to parse Gemini response as JSON.")
-    except Exception as e:
-        # fallback rule-based (simple)
-        text = " ".join([ (a.get("answer") if isinstance(a, dict) else str(a)) for a in (quiz_answers or []) ])
-        text_lower = text.lower()
-        if "math" in text_lower or "data" in text_lower or "python" in text_lower:
-            recommendations = [
-                {"career": "Data Scientist", "reason": "Strong quantitative interest", "score": 90, "required_skills": ["Python", "Pandas", "Machine Learning"]},
-                {"career": "Data Analyst", "reason": "Good for analytical skills", "score": 80, "required_skills": ["SQL","Excel","Python"]},
-            ]
-            summary = "Based on answers, data-related careers are a strong fit. Start with Python, statistics and SQL."
-        elif "design" in text_lower or "ux" in text_lower or "creative" in text_lower:
-            recommendations = [
-                {"career": "UI/UX Designer", "reason": "Creative and user-focused", "score": 88, "required_skills": ["Figma","User Research","Prototyping"]},
-            ]
-            summary = "Design roles suit creativity — focus on building case studies."
-        else:
-            recommendations = [
-                {"career": "Software Engineer", "reason": "General software building interest", "score": 85, "required_skills": ["Programming fundamentals","Data structures","System design"]},
-            ]
-            summary = "A general software engineering path fits. Build projects and learn core CS topics."
-
-        parsed = {
-            "career_goal": getattr(user_profile, "career_goal", ""),
-            "recommendations": recommendations,
-            "summary": summary
-        }
-        return parsed, prompt, "mock-response"
+    except Exception:
+        parsed = _fallback_recommendations(quiz_answers, user_profile)
+        return parsed, prompt, "fallback-response"
