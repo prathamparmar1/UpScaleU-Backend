@@ -1,5 +1,5 @@
 from .views import (QuizSubmitAPIView, UpdateCareerGoalAPIView, QuizHistoryView, LatestQuizSubmissionAPIView,
-                     RoadmapGenerateAPIView, LatestRoadmapView, DashboardOverviewAPIView, SkillGapAnalysisAPIView,
+                     LatestRoadmapView, DashboardOverviewAPIView, SkillGapAnalysisAPIView,
                      LatestSkillGapAPIView, RoadmapFromRecommendationAPIView, RoadmapProgressView,
                      MarkSkillCompletedAPIView, RoadmapListAPIView, RoadmapDetailAPIView)
 from django.urls import path, include
@@ -11,7 +11,6 @@ urlpatterns = [
     path('quiz/history/latest/', LatestQuizSubmissionAPIView.as_view(), name="quiz-history-latest"),
 
     #Roadmap URLs
-    path('roadmap/generate/', RoadmapGenerateAPIView.as_view(), name='roadmap-generate'),
     path("roadmap/history/latest/", LatestRoadmapView.as_view(), name="latest-roadmap"),
     path("roadmap/history/", RoadmapListAPIView.as_view(), name="roadmap-history-list"),
     path("roadmap/<int:roadmap_id>/", RoadmapDetailAPIView.as_view(), name="roadmap-detail"),

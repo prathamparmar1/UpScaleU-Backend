@@ -7,7 +7,7 @@ from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
 from ai.models import CareerRecommendation
 from ai.serializers import CareerRecommendationSerializer
-from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, generate_roadmap, analyze_skill_gaps
+from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, analyze_skill_gaps
 from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
 from .serializers import (QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,
                           CareerRoadmapSerializer,CareerRoadmap,SkillGapAnalysisSerializer,
@@ -76,33 +76,6 @@ class LatestQuizSubmissionAPIView(APIView):
   
     
 #Roadmap View
-class RoadmapGenerateAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        try:
-            # Fetch latest quiz submission
-            quiz_submission = QuizSubmission.objects.filter(user=request.user).order_by('-submitted_at').first()
-            if not quiz_submission:
-                return Response({"error": "No quiz submission found"}, status=400)
-
-            # Call AI/Rules engine to generate roadmap
-            roadmap_data = generate_roadmap(quiz_submission.answers, request.user)
-
-            # Save in DB
-            roadmap = CareerRoadmap.objects.create(
-                user=request.user,
-                quiz_submission=quiz_submission,
-                generated_roadmap=roadmap_data
-            )
-
-            serializer = CareerRoadmapSerializer(roadmap)
-            return Response(serializer.data, status=201)
-
-        except Exception as e:
-            return Response({"error": str(e)}, status=500)
-
-
 class LatestRoadmapView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = CareerRoadmapSerializer
