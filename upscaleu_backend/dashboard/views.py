@@ -246,10 +246,27 @@ class LatestSkillGapAPIView(APIView):
         serializer = SkillGapAnalysisSerializer(analysis)
         return Response(serializer.data, status=200)
 
+from ai.utils import check_rate_limit
+
+# Roadmap generation is called once per career someone explores, and exploring
+# 3-4 recommended careers back-to-back is normal, legitimate usage — so this limit
+# is deliberately generous (a flat per-call cooldown would break that flow). It's
+# only meant to stop runaway/accidental spam, not normal browsing of options.
+ROADMAP_RATE_LIMIT = {"window_minutes": 60, "max_calls": 12}
+
+
 class RoadmapFromRecommendationAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        limit_hit = check_rate_limit(
+            CareerRoadmap.objects.filter(user=request.user),
+            "created_at",
+            **ROADMAP_RATE_LIMIT,
+        )
+        if limit_hit:
+            return Response(limit_hit, status=429)
+
         # User can optionally specify which CareerRecommendation row to use
         rec_id = request.data.get("career_recommendation_id")
 

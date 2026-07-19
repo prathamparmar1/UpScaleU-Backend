@@ -2,7 +2,9 @@ import os
 import re
 import json
 import requests
+from datetime import timedelta
 from django.conf import settings
+from django.utils import timezone
 
 GEMINI_API_KEY = getattr(settings, "GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-2.5-pro"
@@ -21,6 +23,42 @@ ARCHETYPES = {
     "Healers": "care for others — health, therapy, support roles",
     "Builders": "start and grow things — entrepreneurship, business, ventures",
 }
+
+
+def check_rate_limit(queryset, timestamp_field, window_minutes, max_calls):
+    """
+    Rolling-window rate limit based on counting existing rows in the DB, rather than
+    a cache backend — this means it works correctly even if Render runs multiple
+    gunicorn workers (no need for Redis/shared cache to be configured).
+
+    queryset: an already-user-filtered queryset of a model with a timestamp field
+              (e.g. CareerRecommendation.objects.filter(user=request.user))
+    timestamp_field: name of that model's timestamp field, e.g. "generated_at"
+    window_minutes: size of the rolling window
+    max_calls: how many calls are allowed within that window
+
+    Returns None if the caller is within the limit.
+    Returns a dict with an "error" message and "retry_after_seconds" if they've hit it.
+    """
+    cutoff = timezone.now() - timedelta(minutes=window_minutes)
+    recent_qs = queryset.filter(**{f"{timestamp_field}__gte": cutoff}).order_by(timestamp_field)
+    count = recent_qs.count()
+
+    if count < max_calls:
+        return None
+
+    oldest_in_window = recent_qs.first()
+    oldest_time = getattr(oldest_in_window, timestamp_field)
+    retry_after = (oldest_time + timedelta(minutes=window_minutes)) - timezone.now()
+    retry_after_seconds = max(int(retry_after.total_seconds()), 1)
+
+    return {
+        "error": (
+            f"You've hit the limit of {max_calls} requests per {window_minutes} minutes. "
+            f"This protects our AI quota — please try again in a bit."
+        ),
+        "retry_after_seconds": retry_after_seconds,
+    }
 
 
 def build_recommendation_prompt(quiz_answers, user_profile):

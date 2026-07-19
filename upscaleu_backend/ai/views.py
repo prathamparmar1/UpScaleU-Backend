@@ -5,12 +5,25 @@ from rest_framework import status
 from .serializers import CareerRecommendationSerializer
 from .models import CareerRecommendation
 from dashboard.models import QuizSubmission, UserProfile
-from .utils import generate_recommendations
+from .utils import generate_recommendations, check_rate_limit
+
+# Recommendations are relatively expensive and rarely need frequent regeneration —
+# 6 per hour comfortably covers "quiz -> recommendations -> regenerate a couple of
+# times" without leaving room for accidental/abusive spam burning the Gemini quota.
+RECOMMENDATION_RATE_LIMIT = {"window_minutes": 60, "max_calls": 6}
 
 class RecommendCareersAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        limit_hit = check_rate_limit(
+            CareerRecommendation.objects.filter(user=request.user),
+            "generated_at",
+            **RECOMMENDATION_RATE_LIMIT,
+        )
+        if limit_hit:
+            return Response(limit_hit, status=429)
+
         # Optionally accept quiz_submission id in body to use a specific submission
         quiz_id = request.data.get("quiz_submission_id")
         quiz_submission = None
