@@ -46,28 +46,176 @@ def generate_career_plan(responses):
     }
 
 
-def analyze_skill_gaps(career_goal, current_skills):
+def _build_skill_gap_prompt(career_goal, current_skills):
     """
-    Mock logic for MVP — later this can be replaced with OpenAI API.
+    Ask Gemini to compare someone's current skills against what a specific career
+    actually requires, and be concrete about both what's missing and what they
+    already have going for them.
     """
-    # Example pre-defined skills for simplicity
-    required_skills_map = {
-        "Full Stack Developer": ["HTML", "CSS", "JavaScript", "React", "Node.js", "PostgreSQL"],
-        "Data Scientist": ["Python", "Pandas", "NumPy", "Machine Learning", "SQL"],
-        "Mobile App Developer": ["Kotlin", "Swift", "Flutter", "Firebase"],
+    current_skills_text = ", ".join(current_skills) if current_skills else "(none listed)"
+
+    prompt = f"""
+You are a career mentor helping someone figure out exactly what stands between them
+and working as a {career_goal}.
+
+Their current self-reported skills: {current_skills_text}
+
+Return ONLY a JSON object (no markdown fences, no extra text) with exactly this shape:
+{{
+  "career_goal": "{career_goal}",
+  "required_skills": ["<specific skill 1>", "<specific skill 2>", "..."],
+  "strengths": ["<skill from their current list that genuinely matters for this career>", "..."],
+  "skill_gaps": [
+    {{
+      "skill": "<specific missing skill>",
+      "why_it_matters": "<1-2 sentences, specific to this career, not generic>",
+      "how_to_close": "<1-2 concrete sentences on how to build this skill through practice>"
+    }}
+  ],
+  "action_items": [
+    "<specific, ordered next step 1>",
+    "<specific, ordered next step 2>",
+    "<specific, ordered next step 3>"
+  ]
+}}
+
+Rules:
+- required_skills should be 6-10 skills a working professional in this exact career
+  actually needs, named specifically (not vague categories).
+- strengths should only include skills from their current list that are genuinely
+  relevant to this career -- don't pad this list with unrelated skills.
+- skill_gaps should only include required skills they don't already have. If their
+  current skills already cover everything realistic, keep skill_gaps short and say so
+  in the reasoning, don't invent gaps.
+- Do NOT include course names, website names, or resource links -- just the plan.
+""".strip()
+
+    return prompt
+
+
+def _fallback_skill_gap(career_goal, current_skills):
+    """
+    Used only if Gemini is unreachable or returns something unusable. Covers a wider
+    set of careers than the old 3-career hardcoded map, and -- critically -- never
+    silently returns an empty analysis for a career it doesn't recognize.
+    """
+    catalogue = {
+        "full stack developer": ["HTML", "CSS", "JavaScript", "React", "Node.js", "PostgreSQL", "Git", "REST APIs"],
+        "data scientist": ["Python", "Pandas", "NumPy", "Machine Learning", "SQL", "Statistics", "Data Visualization"],
+        "mobile app developer": ["Kotlin", "Swift", "Flutter", "Firebase", "REST APIs", "UI Design Basics"],
+        "ui/ux designer": ["Figma", "User Research", "Prototyping", "Wireframing", "Design Systems", "Usability Testing"],
+        "data analyst": ["SQL", "Excel/Sheets", "Data Visualization", "Statistics", "Python or R"],
+        "wildlife photographer": ["Photography", "Fieldcraft", "Photo Editing", "Wildlife Behavior Knowledge", "Patience/Endurance"],
+        "furniture maker": ["Woodworking", "Design Sketching", "Tool Safety", "Joinery", "Finishing Techniques"],
+        "ceramic artist": ["Wheel Throwing", "Glazing", "Kiln Firing", "Hand-Building", "Design Sensibility"],
+        "event planner": ["Vendor Coordination", "Budgeting", "Client Communication", "Timeline Management"],
+        "content creator": ["Video Editing", "Storytelling", "Consistency", "Basic SEO", "Audience Engagement"],
     }
 
-    required_skills = required_skills_map.get(career_goal, [])
-    skill_gaps = [skill for skill in required_skills if skill not in current_skills]
-    recommendations = [f"Learn {skill} via an online course or project" for skill in skill_gaps]
+    key = (career_goal or "").strip().lower()
+    required_skills = catalogue.get(key)
+
+    if not required_skills:
+        # Unknown career: don't silently return an empty analysis. Give an honest,
+        # generic competency baseline rather than pretending we know this career.
+        required_skills = [
+            "Core technical/craft fundamentals for this field",
+            "Portfolio or demonstrable work samples",
+            "Basic project/time management",
+            "Communication with clients or collaborators",
+            "Domain-specific tools relevant to this career",
+        ]
+
+    current_set = {s.strip().lower() for s in (current_skills or [])}
+    required_lower = {s.lower(): s for s in required_skills}
+
+    strengths = [orig for lower, orig in required_lower.items() if lower in current_set]
+    gaps = [orig for lower, orig in required_lower.items() if lower not in current_set]
+
+    skill_gaps = [
+        {
+            "skill": g,
+            "why_it_matters": "",
+            "how_to_close": "",
+        }
+        for g in gaps
+    ]
+
+    action_items = [f"Build hands-on practice with: {g}" for g in gaps[:3]] or [
+        "Your listed skills already cover the fallback baseline for this career — "
+        "try regenerating with AI for a more specific, career-tailored analysis."
+    ]
 
     return {
         "career_goal": career_goal,
         "required_skills": required_skills,
-        "current_skills": current_skills,
+        "current_skills": current_skills or [],
+        "strengths": strengths,
         "skill_gaps": skill_gaps,
-        "recommendations": recommendations,
+        "recommendations": {
+            "is_fallback": True,
+            "action_items": action_items,
+            "strengths": strengths,
+        },
     }
+
+
+def analyze_skill_gaps(career_goal, current_skills):
+    """
+    Compare current_skills against what career_goal actually requires.
+    Tries Gemini first for a career-specific analysis; falls back to a broader
+    (but still real) rule-based comparison if Gemini is unavailable.
+    """
+    try:
+        prompt = _build_skill_gap_prompt(career_goal, current_skills)
+        raw = call_gemini(prompt, max_output_tokens=2048, temperature=0.5)
+
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            m = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not m:
+                raise ValueError("No JSON object found in Gemini response")
+            parsed = json.loads(m.group(0))
+
+        required_skills = [str(s).strip() for s in (parsed.get("required_skills") or []) if str(s).strip()]
+        if not required_skills:
+            raise ValueError("AI skill gap analysis had no required_skills")
+
+        strengths = [str(s).strip() for s in (parsed.get("strengths") or []) if str(s).strip()]
+
+        skill_gaps = []
+        for g in parsed.get("skill_gaps") or []:
+            if not isinstance(g, dict):
+                continue
+            skill = str(g.get("skill") or "").strip()
+            if not skill:
+                continue
+            skill_gaps.append({
+                "skill": skill,
+                "why_it_matters": str(g.get("why_it_matters") or "").strip(),
+                "how_to_close": str(g.get("how_to_close") or "").strip(),
+            })
+
+        action_items = [str(a).strip() for a in (parsed.get("action_items") or []) if str(a).strip()]
+        if not action_items:
+            action_items = [f"Focus on: {g['skill']}" for g in skill_gaps[:3]]
+
+        return {
+            "career_goal": str(parsed.get("career_goal") or career_goal),
+            "required_skills": required_skills,
+            "current_skills": current_skills or [],
+            "strengths": strengths,
+            "skill_gaps": skill_gaps,
+            "recommendations": {
+                "is_fallback": False,
+                "action_items": action_items,
+                "strengths": strengths,
+            },
+        }
+
+    except Exception:
+        return _fallback_skill_gap(career_goal, current_skills)
 
 
 # ---------------------------------------------------------------------------

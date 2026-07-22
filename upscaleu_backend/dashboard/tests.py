@@ -212,3 +212,62 @@ class RoadmapRateLimitTests(TestCase):
 
         resp = self.client.post(url, {"career": "Data Analyst"}, format="json")
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+
+
+class SkillGapAnalysisTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username="skillgapuser", password="pass12345")
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_known_career_fallback_never_empty(self, mock_call):
+        from .utils import analyze_skill_gaps
+        result = analyze_skill_gaps("Wildlife Photographer", ["Photography"])
+        self.assertGreater(len(result["required_skills"]), 0)
+        self.assertIn("Photography", result["strengths"])
+        self.assertTrue(result["recommendations"]["is_fallback"])
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_unknown_career_does_not_silently_return_empty(self, mock_call):
+        # This is the exact bug being fixed: the old hardcoded map returned an
+        # empty analysis for any career outside its 3 hardcoded options.
+        from .utils import analyze_skill_gaps
+        result = analyze_skill_gaps("Underwater Basket Weaver", [])
+        self.assertGreater(len(result["required_skills"]), 0)
+        self.assertGreater(len(result["skill_gaps"]), 0)
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_endpoint_requires_career_goal(self, mock_call):
+        resp = self.client.post("/api/dash/skill-gap/", {"current_skills": ["Python"]}, format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_endpoint_creates_and_returns_analysis(self, mock_call):
+        resp = self.client.post(
+            "/api/dash/skill-gap/",
+            {"career_goal": "Data Analyst", "current_skills": ["SQL"]},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+        self.assertEqual(resp.data["career_goal"], "Data Analyst")
+        self.assertIn("SQL", resp.data["recommendations"]["strengths"])
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_latest_skill_gap_returns_most_recent(self, mock_call):
+        self.client.post("/api/dash/skill-gap/", {"career_goal": "Data Analyst", "current_skills": []}, format="json")
+        self.client.post("/api/dash/skill-gap/", {"career_goal": "UI/UX Designer", "current_skills": []}, format="json")
+
+        resp = self.client.get("/api/dash/skill-gap/latest/")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data["career_goal"], "UI/UX Designer")
+
+    @patch("dashboard.utils.call_gemini", side_effect=RuntimeError("no network in tests"))
+    def test_blocks_after_ten_calls_in_window(self, mock_call):
+        url = "/api/dash/skill-gap/"
+        for _ in range(10):
+            resp = self.client.post(url, {"career_goal": "Data Analyst", "current_skills": []}, format="json")
+            self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.data)
+
+        resp = self.client.post(url, {"career_goal": "Data Analyst", "current_skills": []}, format="json")
+        self.assertEqual(resp.status_code, 429)

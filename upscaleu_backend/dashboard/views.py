@@ -7,6 +7,7 @@ from rest_framework import generics, status
 from rest_framework.exceptions import NotFound
 from ai.models import CareerRecommendation
 from ai.serializers import CareerRecommendationSerializer
+from ai.utils import check_rate_limit
 from .utils import build_roadmap_from_recommendation, compute_roadmap_progress, analyze_skill_gaps
 from .models import QuizSubmission ,UserProfile, CareerRoadmap, SkillGapAnalysis, RoadmapProgress
 from .serializers import (QuizSubmitSerializer, CareerGoalSerializer, QuizSubmissionHistorySerializer,
@@ -204,10 +205,24 @@ class DashboardOverviewAPIView(APIView):
         )
 
 
+# Skill gap analysis costs one Gemini call per submission; someone comparing a few
+# different target careers in one sitting is normal, so this is more generous than
+# the recommendations limit but still protects the quota from runaway spam.
+SKILL_GAP_RATE_LIMIT = {"window_minutes": 60, "max_calls": 10}
+
+
 class SkillGapAnalysisAPIView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        limit_hit = check_rate_limit(
+            SkillGapAnalysis.objects.filter(user=request.user),
+            "created_at",
+            **SKILL_GAP_RATE_LIMIT,
+        )
+        if limit_hit:
+            return Response(limit_hit, status=429)
+
         career_goal = request.data.get("career_goal")
         current_skills = request.data.get("current_skills", [])
 
@@ -245,8 +260,6 @@ class LatestSkillGapAPIView(APIView):
 
         serializer = SkillGapAnalysisSerializer(analysis)
         return Response(serializer.data, status=200)
-
-from ai.utils import check_rate_limit
 
 # Roadmap generation is called once per career someone explores, and exploring
 # 3-4 recommended careers back-to-back is normal, legitimate usage — so this limit
